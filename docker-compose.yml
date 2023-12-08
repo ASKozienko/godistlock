@@ -1,0 +1,33 @@
+version: "3.7"
+
+services:
+  app:
+    image: "go-docker-ci:1.18-11-debia"
+    tty: true
+    entrypoint: [ "bash" ]
+    working_dir: "/go/src/app"
+    volumes:
+      - "./:/go/src/app"
+      - "/tmp:/tmp"
+    depends_on:
+      - etcd
+      - mongodb
+      - redis
+
+  etcd:
+    image: bitnami/etcd:latest
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+
+  mongodb:
+    image: mongo:6.0.9
+    restart: 'unless-stopped'
+    ports:
+      - "27017:27017"
+
+  redis:
+    image: redis:latest
+    command: "redis-server --save 30 1 --loglevel warning"

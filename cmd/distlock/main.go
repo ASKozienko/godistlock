@@ -38,6 +38,7 @@ import (
 
 func main() {
 	ctx, _ := signal.NotifyContext(context.Background(), syscall.SIGINT)
+	ctx2, ctx2c := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	impl := flag.String("impl", "", "[etcd|mongodb|redis]")
 	flag.Parse()
@@ -45,15 +46,17 @@ func main() {
 	var l godistlock.DistLock
 	switch *impl {
 	case "etcd":
-		l = godistlock.New(buildEtcd(ctx, &wg))
+		l = godistlock.New(buildEtcd(ctx2))
 	case "mongodb":
-		b, err := buildMongodb(ctx, &wg)
+		b, err := buildMongodb(ctx2)
 		if err != nil {
 			panic(err)
 		}
 		l = godistlock.New(b)
 	case "redis":
-		l = godistlock.New(buildRedis(ctx, &wg))
+		l = godistlock.New(buildRedis(ctx2))
+	case "redis-sentinel":
+		l = godistlock.New(buildRedisSentinel(ctx2))
 	default:
 		panic("unsupported impl")
 	}
@@ -85,6 +88,9 @@ func main() {
 		start := time.Now()
 		t := time.NewTicker(10 * time.Second)
 
+		lastTime := time.Now()
+		lastLc := lc.Load()
+
 		for {
 			select {
 			case <-t.C:
@@ -95,16 +101,25 @@ func main() {
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 
-				dist := ""
-				for i, e := range lci {
-					dist += fmt.Sprintf("%d\t", e.Load())
-					if (i+1)%10 == 0 {
-						dist += "\n"
-					}
-				}
+				//dist := ""
+				//for i, e := range lci {
+				//	dist += fmt.Sprintf("%d\t", e.Load())
+				//	if (i+1)%10 == 0 {
+				//		dist += "\n"
+				//	}
+				//}
 
-				fmt.Println(fmt.Sprintf("t: %s lc: %d, le: %d, load: %f, mem: %d, memt: %d", time.Now().Sub(start), lc.Load(), le.Load(), s.Loadavg1, m.Alloc/1024/1024, m.TotalAlloc/1024/1024))
-				fmt.Println(dist)
+				nowTime := time.Now()
+				nowLc := lc.Load()
+				rate := int64(0)
+				if nowTime.Unix()-lastTime.Unix() > 0 {
+					rate = (nowLc - lastLc) / (nowTime.Unix() - lastTime.Unix())
+				}
+				lastTime = nowTime
+				lastLc = nowLc
+
+				fmt.Println(fmt.Sprintf("t: %s rate:%d, lc: %d, le: %d, load: %f, mem: %d, memt: %d", time.Now().Sub(start), rate, lc.Load(), le.Load(), s.Loadavg1, m.Alloc/1024/1024, m.TotalAlloc/1024/1024))
+				//fmt.Println(dist)
 			case <-ctx.Done():
 				return
 			}
@@ -112,10 +127,11 @@ func main() {
 	}()
 
 	wg.Wait()
+	ctx2c()
 	fmt.Println("DONE")
 }
 
-func buildEtcd(ctx context.Context, wg *sync.WaitGroup) godistlock.DistLockBase {
+func buildEtcd(ctx context.Context) godistlock.DistLockBase {
 	l := lock.New(clientv3.Config{
 		Endpoints:            []string{"etcd:2379"},
 		DialTimeout:          10 * time.Second,
@@ -125,17 +141,14 @@ func buildEtcd(ctx context.Context, wg *sync.WaitGroup) godistlock.DistLockBase 
 		DialOptions:          []grpc.DialOption{grpc.WithBlock(), grpc.WithReturnConnectionError(), grpc.WithDisableRetry()},
 	}).WithSessionTtlSec(120).WithLogger(log.New()).WithLockStrategyLoop().Build()
 
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-
 		l.Run(ctx)
 	}()
 
 	return l
 }
 
-func buildMongodb(ctx context.Context, wg *sync.WaitGroup) (godistlock.DistLockBase, error) {
+func buildMongodb(ctx context.Context) (godistlock.DistLockBase, error) {
 	mOpts := options.Client().ApplyURI("mongodb://mongodb:27017").
 		SetWriteConcern(writeconcern.Majority()).
 		SetReadConcern(readconcern.Snapshot())
@@ -159,9 +172,7 @@ func buildMongodb(ctx context.Context, wg *sync.WaitGroup) (godistlock.DistLockB
 		break
 	}
 
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		<-ctx.Done()
 
 		mCtx, mCtxCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -177,17 +188,25 @@ func buildMongodb(ctx context.Context, wg *sync.WaitGroup) (godistlock.DistLockB
 	return l, nil
 }
 
-func buildRedis(ctx context.Context, wg *sync.WaitGroup) godistlock.DistLockBase {
+func buildRedis(ctx context.Context) godistlock.DistLockBase {
 	cl := redis.NewClient(&redis.Options{
 		Addr: "redis:6379",
 		DB:   0,
 	})
+
 	l := v9.New(cl, v9.WithSessionTtlSec(300*time.Second), v9.WithLockLoopTimeout(50*time.Millisecond))
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-	}()
+	return l
+}
+
+func buildRedisSentinel(ctx context.Context) godistlock.DistLockBase {
+	cl := redis.NewFailoverClient(&redis.FailoverOptions{
+		MasterName:    "mymaster",
+		SentinelAddrs: []string{"redis-sentinel1:5000", "redis-sentinel2:5000", "redis-sentinel3:5000"},
+		DB:            0,
+	})
+
+	l := v9.New(cl, v9.WithSessionTtlSec(60*time.Second), v9.WithLockLoopTimeout(50*time.Millisecond), v9.WithWaitNumSlaves(1, time.Second))
 
 	return l
 }
@@ -203,9 +222,10 @@ func worker(ctx context.Context, i int, id string, l godistlock.DistLock, lci, l
 			return
 		}
 
-		locked, err := ses.LockWithTimeout(ctx, id, true, 10*time.Second)
+		locked, err := ses.Lock(ctx, id, true)
 		if err != nil {
-			fmt.Println(i, "lock", err)
+			fmt.Println(i, "lock: ", err)
+			time.Sleep(10 * time.Second)
 			continue
 		}
 
@@ -218,9 +238,9 @@ func worker(ctx context.Context, i int, id string, l godistlock.DistLock, lci, l
 		lc.Inc()
 
 		time.Sleep(time.Duration(r.Int63n(50)) * time.Millisecond)
-		_, err = ses.UnlockWithTimeout(id, 10*time.Second)
+		_, err = ses.UnlockWithTimeout(id, 2*time.Second)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			fmt.Println(i, "unlock", err)
+			fmt.Println(i, "unlock: ", err)
 		}
 
 		time.Sleep(time.Duration(r.Int63n(10)) * time.Millisecond)

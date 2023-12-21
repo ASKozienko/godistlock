@@ -13,6 +13,15 @@ services:
       - etcd
       - mongodb
       - redis
+      - redis-master
+      - redis-slave1
+      - redis-slave2
+      - redis-sentinel1
+      - redis-sentinel2
+      - redis-sentinel3
+#      - etcd1
+#      - etcd2
+#      - etcd3
 
   etcd:
     image: bitnami/etcd:latest
@@ -21,6 +30,55 @@ services:
       - "2380:2380"
     environment:
       - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_SNAPSHOT_COUNT=100000
+      - ETCD_AUTO_COMPACTION_MODE=periodic
+      - ETCD_AUTO_COMPACTION_RETENTION=2m
+
+#  etcd1:
+#    image: bitnami/etcd:latest
+#    environment:
+#      - ALLOW_NONE_AUTHENTICATION=yes
+#      - ETCD_SNAPSHOT_COUNT=1000000
+#      - ETCD_AUTO_COMPACTION_MODE=periodic
+#      - ETCD_AUTO_COMPACTION_RETENTION=5m
+#      - ETCD_NAME=etcd1
+#      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
+#      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+#      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+#      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+#      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
+#      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+#      - ETCD_INITIAL_CLUSTER_STATE=new
+#  etcd2:
+#    image: bitnami/etcd:latest
+#    environment:
+#      - ALLOW_NONE_AUTHENTICATION=yes
+#      - ETCD_SNAPSHOT_COUNT=1000000
+#      - ETCD_AUTO_COMPACTION_MODE=periodic
+#      - ETCD_AUTO_COMPACTION_RETENTION=5m
+#      - ETCD_NAME=etcd2
+#      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
+#      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+#      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+#      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+#      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
+#      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+#      - ETCD_INITIAL_CLUSTER_STATE=new
+#  etcd3:
+#    image: bitnami/etcd:latest
+#    environment:
+#      - ALLOW_NONE_AUTHENTICATION=yes
+#      - ETCD_SNAPSHOT_COUNT=1000000
+#      - ETCD_AUTO_COMPACTION_MODE=periodic
+#      - ETCD_AUTO_COMPACTION_RETENTION=5m
+#      - ETCD_NAME=etcd3
+#      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
+#      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+#      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
+#      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+#      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
+#      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+#      - ETCD_INITIAL_CLUSTER_STATE=new
 
   mongodb:
     image: mongo:6.0.9
@@ -31,3 +89,41 @@ services:
   redis:
     image: redis:latest
     command: "redis-server --save 30 1 --loglevel warning"
+
+  redis-master:
+    container_name: "redis-master"
+    image: redis:latest
+    command: redis-server
+    ports:
+      - "6379:6379"
+  redis-slave1:
+    image: redis:latest
+    ports:
+      - "6380:6379"
+    command: redis-server --slaveof redis-master 6379
+  redis-slave2:
+    image: redis:latest
+    ports:
+      - "6381:6379"
+    command: redis-server --slaveof redis-master 6379
+  redis-sentinel1:
+    image: redis:latest
+    ports:
+      - "5000:5000"
+    command: redis-server /data/sentinel.conf --sentinel
+    volumes:
+      - "./sentinel.conf:/data/sentinel.conf"
+  redis-sentinel2:
+    image: redis:latest
+    ports:
+      - "5001:5000"
+    command: redis-server /data/sentinel.conf --sentinel
+    volumes:
+      - "./sentinel.conf:/data/sentinel.conf"
+  redis-sentinel3:
+    image: redis:latest
+    ports:
+      - "5002:5000"
+    command: redis-server /data/sentinel.conf --sentinel
+    volumes:
+      - "./sentinel.conf:/data/sentinel.conf"

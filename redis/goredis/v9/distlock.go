@@ -18,10 +18,12 @@ const deleteScript = `
 type DistLock struct {
 	sessionTtl      time.Duration
 	lockLoopTimeout time.Duration
-	client          redis.UniversalClient
+	waitNumSlaves   int
+	waitTimeout     time.Duration
+	client          *redis.Client
 }
 
-func New(client redis.UniversalClient, options ...option) *DistLock {
+func New(client *redis.Client, options ...Option) *DistLock {
 	l := &DistLock{
 		sessionTtl:      120 * time.Second,
 		lockLoopTimeout: 50 * time.Millisecond,
@@ -43,6 +45,13 @@ func (l *DistLock) Lock(ctx context.Context, session, id string, blocking bool) 
 		}
 
 		if ok {
+			if l.waitNumSlaves > 0 {
+				num, err := l.client.Wait(ctx, l.waitNumSlaves, l.waitTimeout).Result()
+				if err != nil || num < int64(l.waitNumSlaves) {
+					return false, err
+				}
+			}
+
 			return true, nil
 		}
 

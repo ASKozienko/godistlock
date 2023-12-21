@@ -30,6 +30,7 @@ func (o *options) Build() *DistLock {
 		reconnectTimeout: 10 * time.Second,
 		l:                null.New(),
 		connCh:           make(chan *conn),
+		errorCh:          make(chan error, 1),
 	}
 
 	dl.lockFunc = dl.lockWithLoop

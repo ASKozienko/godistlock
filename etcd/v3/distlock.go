@@ -12,6 +12,15 @@ import (
 
 type LockFunc func(ctx context.Context, client *clientv3.Client, leaseId clientv3.LeaseID, session, id string, blocking bool) (bool, error)
 
+/**
+Не работает!
+Если возникает ошибка context.DeadlineExceeded на Unlock то ключ становится невозможно удалить.
+Чтобы исправить ошибку lease необходимо создавать не на все приложение а на каждый воркер
+и удалять lease при любой ошибке
+
+etcd довольно плохо работает при огромном числе записей и удалений. База растет слишком быстро,
+compaction необходимо вызывать довольно часто - каждые 5m или даже чаще
+*/
 type DistLock struct {
 	config           clientv3.Config
 	sessionTtlSec    int64
@@ -20,7 +29,8 @@ type DistLock struct {
 	lockFunc         LockFunc
 	l                logger.Logger
 
-	connCh chan *conn
+	connCh  chan *conn
+	errorCh chan error
 }
 
 type conn struct {
@@ -31,7 +41,17 @@ type conn struct {
 func (l *DistLock) Lock(ctx context.Context, session, id string, blocking bool) (bool, error) {
 	select {
 	case conn := <-l.connCh:
-		return l.lockFunc(ctx, conn.client, conn.leaseId, session, id, blocking)
+		r, err := l.lockFunc(ctx, conn.client, conn.leaseId, session, id, blocking)
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// nop
+		} else if err != nil {
+			select {
+			case l.errorCh <- err:
+			default:
+			}
+		}
+
+		return r, err
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
@@ -40,7 +60,17 @@ func (l *DistLock) Lock(ctx context.Context, session, id string, blocking bool) 
 func (l *DistLock) Unlock(ctx context.Context, session, id string) (bool, error) {
 	select {
 	case conn := <-l.connCh:
-		return l.unlock(ctx, conn.client, session, id)
+		r, err := l.unlock(ctx, conn.client, session, id)
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// nop
+		} else if err != nil {
+			select {
+			case l.errorCh <- err:
+			default:
+			}
+		}
+
+		return r, err
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
@@ -119,9 +149,18 @@ func (l *DistLock) handler(ctx context.Context, client *clientv3.Client, leaseId
 		leaseId: leaseId,
 	}
 
+	// clean up error ch
+	select {
+	case <-l.errorCh:
+	default:
+	}
+
 	for {
 		select {
 		case l.connCh <- conn:
+		case err := <-l.errorCh:
+			l.l.Error("got net error: %s", err)
+			return
 		case _, ok := <-lch:
 			if !ok {
 				l.l.Error("keepalive channel is closed")

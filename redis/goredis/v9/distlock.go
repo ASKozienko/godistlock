@@ -62,7 +62,7 @@ func (l *DistLock) Lock(ctx context.Context, session, id string, blocking bool) 
 		select {
 		case <-time.After(l.lockLoopTimeout):
 		case <-ctx.Done():
-			return false, nil
+			return false, ctx.Err()
 		}
 	}
 }

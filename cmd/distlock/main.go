@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	v9 "github.com/ASKozienko/godistlock/redis/goredis/v9"
 	"github.com/redis/go-redis/v9"
 
@@ -215,14 +217,14 @@ func worker(ctx context.Context, i int, id string, l godistlock.DistLock, lci, l
 	s := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(s)
 
-	ses := l.NewSession()
+	ses := uuid.New().String()
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		locked, err := ses.Lock(ctx, id, true)
+		locked, err := l.Lock(ctx, ses, id, true)
 		if err != nil {
 			fmt.Println(i, "lock: ", err)
 			time.Sleep(10 * time.Second)
@@ -238,7 +240,7 @@ func worker(ctx context.Context, i int, id string, l godistlock.DistLock, lci, l
 		lc.Inc()
 
 		time.Sleep(time.Duration(r.Int63n(50)) * time.Millisecond)
-		_, err = ses.UnlockWithTimeout(id, 2*time.Second)
+		_, err = l.UnlockWithTimeout(ses, id, 2*time.Second)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Println(i, "unlock: ", err)
 		}

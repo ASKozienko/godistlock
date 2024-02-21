@@ -2,6 +2,7 @@ package v9
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -47,8 +48,12 @@ func (l *DistLock) Lock(ctx context.Context, session, id string, blocking bool) 
 		if ok {
 			if l.waitNumSlaves > 0 {
 				num, err := l.client.Wait(ctx, l.waitNumSlaves, l.waitTimeout).Result()
-				if err != nil || num < int64(l.waitNumSlaves) {
+				if err != nil {
 					return false, err
+				}
+
+				if num < int64(l.waitNumSlaves) {
+					return false, fmt.Errorf("slaves replication timeout")
 				}
 			}
 
